@@ -1,0 +1,121 @@
+name: CICD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cicd-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build-and-test:
+    name: Build and test (host)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      has_build: ${{ steps.detect.outputs.has_build }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect build system
+        id: detect
+        run: |
+          if [ -f CMakeLists.txt ]; then
+            echo "has_build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_build=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::CMakeLists.txt not found; build and test skipped. This is NOT a passing verification."
+            echo "### Build and test skipped: no CMakeLists.txt in repository root" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Install build tools
+        if: steps.detect.outputs.has_build == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build gcc g++
+
+      - name: Configure (strict warnings)
+        if: steps.detect.outputs.has_build == 'true'
+        run: >
+          cmake -S . -B build/host -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_C_FLAGS="-Wall -Wextra -Werror"
+          -DCMAKE_CXX_FLAGS="-Wall -Wextra -Werror"
+
+      - name: Compile
+        if: steps.detect.outputs.has_build == 'true'
+        run: cmake --build build/host --parallel
+
+      - name: Run unit tests
+        if: steps.detect.outputs.has_build == 'true'
+        run: ctest --test-dir build/host --output-on-failure --output-junit "${{ github.workspace }}/build/host/test-results.xml"
+
+      - name: Upload test results
+        if: always() && steps.detect.outputs.has_build == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results
+          path: build/host/test-results.xml
+          if-no-files-found: warn
+
+  build-hex:
+    name: Build hex (target)
+    needs: build-and-test
+    if: needs.build-and-test.outputs.has_build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Target toolchain is not yet decided (Renesas / TI); see AGENTS.md.
+      - name: Detect target toolchain
+        id: target
+        run: |
+          if [ -f cmake/toolchain-target.cmake ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::cmake/toolchain-target.cmake not found; hex build skipped."
+            echo "### Hex build skipped: no cmake/toolchain-target.cmake" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Install target toolchain
+        if: steps.target.outputs.enabled == 'true'
+        env:
+          TOOLCHAIN_APT_PACKAGES: ${{ vars.TARGET_TOOLCHAIN_APT_PACKAGES }}
+        run: |
+          if [ -z "$TOOLCHAIN_APT_PACKAGES" ]; then
+            echo "::error::Repository variable TARGET_TOOLCHAIN_APT_PACKAGES is not set."
+            exit 1
+          fi
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build $TOOLCHAIN_APT_PACKAGES
+
+      - name: Configure (target)
+        if: steps.target.outputs.enabled == 'true'
+        run: >
+          cmake -S . -B build/target -G Ninja
+          -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-target.cmake
+          -DCMAKE_BUILD_TYPE=Release
+
+      # The project must define a "hex" target (for example via objcopy -O ihex).
+      - name: Build hex
+        if: steps.target.outputs.enabled == 'true'
+        run: cmake --build build/target --target hex --parallel
+
+      - name: Upload hex
+        if: steps.target.outputs.enabled == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-hex
+          path: build/target/**/*.hex
+          if-no-files-found: error

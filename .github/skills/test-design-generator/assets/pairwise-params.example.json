@@ -1,0 +1,8 @@
+{
+  "parameters": {
+    "MotorVariant": ["S", "M", "L"],
+    "Mode": ["OFF", "INT", "AUTO", "ON"],
+    "RainSensor": ["valid", "stale", "invalid"]
+  },
+  "exclude": []
+}
