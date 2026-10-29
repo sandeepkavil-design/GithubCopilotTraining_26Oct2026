@@ -67,3 +67,5 @@ All 46 PRD requirement IDs map to exactly one story: PR-001 (003), 002 (004), 00
 5. AGENTS.md Q11 assumes 0-70 degC, narrower than typical automotive MCU ranges (US-016).
 6. AGENTS.md Q11 offers "CRC/HMAC"; HMAC conflicts with the no-hardcoded-keys rule unless key storage is defined (US-018).
 7. Stories US-016, US-024, US-029 are analysis deliverables, not code; confirm ownership.
+
+## Training purposes
